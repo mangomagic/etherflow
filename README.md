@@ -1,5 +1,7 @@
 # EtherFlow
 
+![Screenshot](./screenshot.png)
+
 Local Flask app for **tracing and visualizing Ethereum wallet-to-wallet flow**.
 Enter a seed address, crawl its transaction graph a few hops out, and explore it as an
 interactive force-directed graph. Built for ad-hoc investigations: no database, no build
