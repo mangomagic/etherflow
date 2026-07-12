@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EtherFlow — wallet flow tracer</title>
+  <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0e1116; color: #e6edf3;
+      display: flex; flex-direction: column; height: 100vh;
+    }
+    header {
+      padding: 12px 16px; border-bottom: 1px solid #21262d; display: flex;
+      gap: 10px; align-items: center; flex-wrap: wrap; background: #161b22;
+      flex: none;
+    }
+    header h1 { font-size: 16px; margin: 0 12px 0 0; font-weight: 600; }
+    input, button, select {
+      font: inherit; padding: 7px 10px; border-radius: 6px;
+      border: 1px solid #30363d; background: #0d1117; color: #e6edf3;
+    }
+    input#address { width: 380px; font-family: ui-monospace, monospace; }
+    input#search  { width: 170px; }
+    input[type="number"] { width: 64px; }
+    label { font-size: 12px; color: #8b949e; display: flex; gap: 5px; align-items: center; }
+    button {
+      background: #238636; border-color: #2ea043; cursor: pointer; font-weight: 600;
+    }
+    button:disabled { opacity: .5; cursor: default; }
+    button.secondary {
+      background: transparent; border-color: #30363d; color: #8b949e; font-weight: 400;
+    }
+    button.secondary:hover { color: #e6edf3; border-color: #8b949e; }
+    #status { font-size: 12px; color: #8b949e; min-height: 16px; padding: 6px 16px; flex: none; }
+    #status.error { color: #f85149; }
+    #main { flex: 1; min-height: 0; display: flex; position: relative; }
+    #graph { flex: 1; min-width: 0; height: 100%; }
+    .warn { color: #d29922; }
+
+    /* ── Analysis sidebar ─────────────────────────────────────────────── */
+    #sidebar {
+      width: 320px; flex: none; display: none; flex-direction: column;
+      overflow-y: auto; border-left: 1px solid #21262d; background: #0d1117;
+      padding: 12px 14px;
+    }
+    #sidebar .sb-head { display: flex; align-items: baseline; justify-content: space-between; }
+    #sidebar h2 { font-size: 13px; margin: 0; }
+    #sidebar .sb-hide { cursor: pointer; color: #8b949e; font-size: 12px; }
+    #sidebar .sb-hide:hover { color: #e6edf3; }
+    #sidebar h3 {
+      font-size: 11px; color: #8b949e; text-transform: uppercase;
+      letter-spacing: .05em; margin: 14px 0 4px; font-weight: 600;
+    }
+    #seed-summary {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 10px;
+      font-size: 12px;
+    }
+    #seed-summary .stat .sum-label { color: #8b949e; font-size: 11px; }
+    #seed-summary .stat .sum-val { font-family: ui-monospace, monospace; }
+    .flow-row {
+      display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+      padding: 3px 6px; border-radius: 5px; cursor: pointer;
+      font: 11px/1.6 ui-monospace, monospace;
+    }
+    .flow-row:hover { background: #21262d; }
+    .flow-addr { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .flow-val { color: #8b949e; white-space: nowrap; }
+    .sb-hint { margin-top: 16px; font-size: 11px; color: #6e7681; line-height: 1.5; }
+
+    /* ── Legend overlay ───────────────────────────────────────────────── */
+    #legend {
+      position: absolute; left: 12px; bottom: 12px; z-index: 5; display: none;
+      background: rgba(22,27,34,.88); border: 1px solid #30363d; border-radius: 8px;
+      padding: 8px 12px; font-size: 11px; color: #8b949e; line-height: 1.8;
+    }
+    #legend .lg { display: inline-block; width: 16px; text-align: center; }
+
+    /* ── Node editor dialog ───────────────────────────────────────────── */
+    #annotation-popup {
+      display: none; position: fixed; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+      padding: 14px 16px; z-index: 100;
+      width: min(820px, 95vw); max-height: 90vh; overflow-y: auto;
+      box-shadow: 0 8px 32px rgba(0,0,0,.6);
+    }
+    #annotation-popup h3 {
+      margin: 0 0 6px; font-size: 12px; color: #8b949e; font-weight: 400;
+      font-family: ui-monospace, monospace; word-break: break-all;
+    }
+    #annotation-note {
+      width: 100%; margin: 6px 0 10px; padding: 7px 8px;
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+      color: #e6edf3; font: 13px/1.4 inherit; resize: vertical; min-height: 64px;
+    }
+    #annotation-popup .actions { display: flex; gap: 8px; justify-content: flex-end; }
+    #annotation-popup .btn-clear {
+      background: transparent; border-color: #f85149; color: #f85149;
+    }
+    #annotation-etherscan, #annotation-expand {
+      background: transparent; border-color: #30363d; color: #8b949e;
+    }
+    #annotation-expand { margin-right: auto; border-color: #388bfd; color: #58a6ff; }
+    .color-swatches { display: flex; gap: 7px; flex-wrap: wrap; margin: 8px 0 4px; }
+    .swatch {
+      width: 22px; height: 22px; border-radius: 50%; cursor: pointer;
+      border: 2px solid transparent; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; transition: transform .1s;
+    }
+    .swatch:hover { transform: scale(1.2); }
+    .swatch.selected { border-color: #fff; box-shadow: 0 0 0 1px #fff; }
+
+    #tx-section { border-top: 1px solid #30363d; margin-top: 12px; padding-top: 10px; }
+    #tx-section h4 { margin: 0 0 8px; font-size: 12px; color: #8b949e; font-weight: 400; }
+    #tx-summary {
+      display: none; flex-wrap: wrap; gap: 4px 22px; margin: 2px 0 10px; font-size: 12px;
+    }
+    #tx-summary .sum-item { display: flex; flex-direction: column; }
+    #tx-summary .sum-label { color: #8b949e; font-size: 11px; }
+    #tx-summary .sum-val { font-family: ui-monospace, monospace; }
+    #tx-table {
+      width: 100%; border-collapse: collapse;
+      font-size: 11px; font-family: ui-monospace, monospace;
+    }
+    #tx-table th {
+      text-align: left; color: #8b949e; padding: 4px 6px;
+      border-bottom: 1px solid #30363d; white-space: nowrap;
+    }
+    #tx-table td { padding: 4px 6px; border-bottom: 1px solid #21262d; }
+    #tx-table tr:hover td { background: #21262d; cursor: default; }
+    #tx-table .tx-hash-link { color: inherit; text-decoration: none; }
+    #tx-table .tx-hash-link:hover { text-decoration: underline; color: #58a6ff; }
+    .tx-out { color: #ff7b72; }
+    .tx-in  { color: #3fb950; }
+    .tx-val { text-align: right; }
+    .tx-method { color: #8b949e; max-width: 100px; overflow: hidden;
+                 text-overflow: ellipsis; white-space: nowrap; }
+    #tx-pagination {
+      display: flex; align-items: center; gap: 10px; margin-top: 8px;
+      font-size: 12px; color: #8b949e;
+    }
+    #tx-pagination button { padding: 3px 10px; font-size: 12px; }
+    #tx-pagination button:disabled { opacity: .4; cursor: default; }
+    #tx-loading { color: #8b949e; font-size: 12px; padding: 12px 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>EtherFlow</h1>
+    <input id="address" placeholder="0x… seed wallet address" spellcheck="false"
+           value="0xd8da6bf26964af9d7eed9e03e53415d37aa96045">
+    <label>depth <input id="depth" type="number" min="1" max="4" value="2"></label>
+    <label>limit <input id="limit" type="number" min="1" max="100" value="25"></label>
+    <label>source
+      <select id="source">
+        <option value="api">Live API</option>
+        <option value="csv">CSV (data/)</option>
+      </select>
+    </label>
+    <button id="go">Trace</button>
+    <input id="search" placeholder="find address / note…" spellcheck="false"
+           title="Search by address, nametag, or your notes — Enter to jump">
+    <label>edge width
+      <select id="edge-weight" title="What edge thickness represents">
+        <option value="count">tx count</option>
+        <option value="volume">ETH volume</option>
+      </select>
+    </label>
+    <button id="export-png" class="secondary" title="Download a PNG snapshot of the graph">PNG</button>
+    <button id="export-json" class="secondary" title="Download the graph as JSON">JSON</button>
+  </header>
+  <div id="status">
+    {% if not configured %}<span class="warn">⚠ ETHERSCAN_API_KEY not set — use the CSV source, or see README.md.</span>{% endif %}
+    {% if csv_count %}<span> · {{ csv_count }} CSV file(s) detected in data/</span>{% endif %}
+  </div>
+  <div id="main">
+    <div id="graph"></div>
+    <div id="legend">
+      <span class="lg" style="color:#ffd33d">★</span> seed wallet<br>
+      <span class="lg" style="color:#e3b341">◆</span> named address<br>
+      <span class="lg" style="color:#58a6ff">●</span> colour = hop distance<br>
+      <span class="lg" style="color:#6e7681">●</span> high-volume hub (not expanded)<br>
+      <span class="lg">◌</span> dashed border = annotated
+    </div>
+    <aside id="sidebar">
+      <div class="sb-head">
+        <h2>Analysis</h2>
+        <span class="sb-hide" id="sidebar-hide" title="Hide (re-trace to show again)">hide ×</span>
+      </div>
+      <div id="seed-summary"></div>
+      <h3>Top inflows → seed</h3>
+      <div id="top-in"></div>
+      <h3>Top outflows ← seed</h3>
+      <div id="top-out"></div>
+      <h3>Most active counterparties</h3>
+      <div id="top-active"></div>
+      <div class="sb-hint">
+        Click a row to fly to that wallet.<br>
+        <b>Shift-click</b> two nodes on the graph to trace the shortest path between
+        them; Esc or click empty space to clear.
+      </div>
+    </aside>
+  </div>
+
+  <div id="annotation-popup">
+    <h3 id="popup-addr"></h3>
+    <div class="color-swatches" id="color-swatches"></div>
+    <textarea id="annotation-note" placeholder="Short note about this wallet…"></textarea>
+    <div class="actions">
+      <button id="annotation-expand" title="Crawl one more hop out from this wallet and add it to the graph">Expand +1 hop</button>
+      <button class="btn-clear" id="annotation-clear">Clear all</button>
+      <button id="annotation-etherscan" class="secondary">Etherscan ↗</button>
+      <button id="annotation-cancel" class="secondary">Cancel</button>
+      <button id="annotation-save">Save</button>
+    </div>
+
+    <div id="tx-section">
+      <h4 id="tx-heading">Transactions</h4>
+      <div id="tx-summary"></div>
+      <div id="tx-loading"></div>
+      <table id="tx-table" style="display:none">
+        <thead>
+          <tr>
+            <th>Date</th><th></th><th>Counterparty</th>
+            <th class="tx-val">ETH</th><th>Method</th>
+          </tr>
+        </thead>
+        <tbody id="tx-body"></tbody>
+      </table>
+      <div id="tx-pagination" style="display:none">
+        <button id="tx-prev">← Prev</button>
+        <span id="tx-page-info"></span>
+        <button id="tx-next">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const statusEl = $("status");
+    let network = null;
+
+    const CSV_SEEDS = {{ csv_seeds | tojson }};
+    const DEFAULT_ADDRESS = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045";
+
+    $("source").addEventListener("change", () => {
+      if ($("source").value === "csv" && CSV_SEEDS.length > 0) {
+        const cur = $("address").value.trim();
+        if (!cur || cur === DEFAULT_ADDRESS) {
+          $("address").value = CSV_SEEDS[0];
+        }
+      }
+    });
+
+    const COLORS = ["#58a6ff", "#3fb950", "#d29922", "#bc8cff", "#ff7b72"];
+    const EDGE_DEFAULT = { color: "#30363d", highlight: "#58a6ff", opacity: 1 };
+
+    function noteSnippet(note) {
+      if (!note) return "";
+      const first = note.split("\n")[0];
+      return first.length > 30 ? first.slice(0, 29) + "…" : first;
+    }
+
+    const PALETTE = [
+      { color: null,      label: "Default" },
+      { color: "#ff7b72", label: "Red"     },
+      { color: "#ffa657", label: "Orange"  },
+      { color: "#ffd33d", label: "Yellow"  },
+      { color: "#3fb950", label: "Green"   },
+      { color: "#39d353", label: "Mint"    },
+      { color: "#58a6ff", label: "Blue"    },
+      { color: "#bc8cff", label: "Purple"  },
+      { color: "#f778ba", label: "Pink"    },
+      { color: "#e6edf3", label: "White"   },
+      { color: "#6e7681", label: "Grey"    },
+    ];
+
+    function setStatus(msg, isError = false) {
+      statusEl.textContent = msg;
+      statusEl.className = isError ? "error" : "";
+    }
+
+    function abbrev(addr) {
+      return addr ? addr.slice(0, 8) + "…" + addr.slice(-4) : "—";
+    }
+
+    function fmtEth(v) {
+      if (v >= 1000) return v.toFixed(0);
+      if (v >= 10)   return v.toFixed(2);
+      if (v >= 0.01) return v.toFixed(4);
+      return v === 0 ? "0" : v.toFixed(6);
+    }
+
+    function fmtDate(ts) {
+      return ts ? new Date(ts * 1000).toISOString().slice(0, 10) : "—";
+    }
+
+    async function trace() {
+      const address = $("address").value.trim();
+      const depth = $("depth").value, limit = $("limit").value;
+      const source = $("source").value;
+      if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+        return setStatus("Enter a valid 0x… 42-char address.", true);
+      }
+      $("go").disabled = true;
+      setStatus(source === "csv" ? "Building graph from CSV files…"
+                                 : "Crawling… (this can take a few seconds per hop)");
+      try {
+        const url = `/api/trace?address=${address}&depth=${depth}&limit=${limit}&source=${source}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Request failed");
+        render(data);
+        setStatus(`${data.stats.nodes} wallets, ${data.stats.edges} flows. ` +
+                  `Hover for details · click a node to inspect · shift-click two nodes for a path.`);
+      } catch (err) {
+        setStatus(err.message, true);
+      } finally {
+        $("go").disabled = false;
+      }
+    }
+
+    let visNodes = null;
+    let visEdges = null;
+    let lastData = null;
+
+    function naturalColor(n) {
+      if (n._seed)       return "#ffd33d";
+      if (n._highVolume) return "#6e7681";
+      if (n._tagged)     return "#e3b341";
+      return COLORS[Math.min(n._depth || 0, COLORS.length - 1)];
+    }
+
+    function nodeVisProps(n) {
+      const titleSuffix = n.highVolume ? "\n(high-volume hub — not expanded)" : "";
+      const noteSuffix  = n.annotation ? `\n📝 ${n.annotation}` : "";
+      const hasAnnotation = !!(n.annotation || n.customColor);
+      // vis-network's html multi-font only parses <b>/<i>/<code>; the note
+      // snippet is tagged <i> and styled via the font.ital config.
+      const snippet = noteSnippet(n.annotation);
+      const fullLabel = snippet ? `${n.label}\n<i>${snippet}</i>` : n.label;
+      return {
+        id: n.id,
+        label: fullLabel,
+        _baseLabel: n.label,
+        title: `${n.title}${titleSuffix}${noteSuffix}`,
+        _note: n.annotation || "",
+        _customColor: n.customColor || null,
+        _seed: n.seed, _tagged: n.tagged,
+        _highVolume: n.highVolume, _depth: n.depth,
+        shape: n.seed ? "star" : (n.tagged ? "diamond" : "dot"),
+        size: n.seed ? 26 : (n.tagged ? 18 : 14),
+        color: n.customColor || (n.seed ? "#ffd33d"
+             : n.highVolume ? "#6e7681"
+             : n.tagged ? "#e3b341"
+             : COLORS[Math.min(n.depth, COLORS.length - 1)]),
+        borderWidth: hasAnnotation ? 3 : 1,
+        shapeProperties: { borderDashes: hasAnnotation ? [4, 2] : false },
+      };
+    }
+
+    function edgeWeightValue(count, eth) {
+      // Tiny floor so zero-ETH edges stay visible in volume mode.
+      return $("edge-weight").value === "volume" ? Math.max(eth, 1e-6) : count;
+    }
+
+    function edgeVisProps(e) {
+      return {
+        id: `${e.from}|${e.to}`,
+        from: e.from,
+        to: e.to,
+        _count: e.count,
+        _eth: e.value_eth,
+        value: edgeWeightValue(e.count, e.value_eth),
+        title: `${e.count} tx · ${fmtEth(e.value_eth)} ETH`,
+        arrows: "to",
+        color: { ...EDGE_DEFAULT },
+      };
+    }
+
+    function render(data) {
+      lastData = data;
+      pathSource = null;
+      pathActive = false;
+      const nodes = data.nodes.map(nodeVisProps);
+      const edges = data.edges.map(edgeVisProps);
+
+      const container = $("graph");
+      visNodes = new vis.DataSet(nodes);
+      visEdges = new vis.DataSet(edges);
+      const visData = { nodes: visNodes, edges: visEdges };
+      const options = {
+        physics: { stabilization: true, barnesHut: { gravitationalConstant: -8000, springLength: 120 } },
+        interaction: { hover: true, tooltipDelay: 120 },
+        nodes: { font: {
+          color: "#e6edf3", face: "ui-monospace, monospace", size: 11, multi: "html",
+          ital: { color: "#8b949e", size: 10, face: "ui-monospace, monospace" },
+        } },
+        edges: { smooth: { type: "dynamic" }, scaling: { min: 1, max: 8 } },
+      };
+      if (network) network.destroy();
+      network = new vis.Network(container, visData, options);
+
+      network.on("click", (params) => {
+        const shift = params.event.srcEvent.shiftKey;
+        if (params.nodes.length === 1) {
+          if (shift) return handlePathClick(params.nodes[0]);
+          return openAnnotationPopup(params.nodes[0]);
+        }
+        // Click on empty space clears any path highlight.
+        if (pathActive || pathSource) {
+          clearPathHighlight();
+          setStatus("");
+        }
+      });
+
+      $("legend").style.display = "block";
+      buildAnalysis(data);
+    }
+
+    // ── Edge weight toggle ───────────────────────────────────────────────────
+
+    $("edge-weight").addEventListener("change", () => {
+      if (!visEdges) return;
+      visEdges.update(visEdges.get().map(e => ({
+        id: e.id, value: edgeWeightValue(e._count, e._eth),
+      })));
+      setStatus($("edge-weight").value === "volume"
+        ? "Edge thickness now reflects ETH volume."
+        : "Edge thickness now reflects transaction count.");
+    });
+
+    // ── Search ───────────────────────────────────────────────────────────────
+
+    function runSearch() {
+      const q = $("search").value.trim().toLowerCase();
+      if (!q || !visNodes) return;
+      const matches = visNodes.get().filter(n =>
+        n.id.includes(q) ||
+        (n._baseLabel || "").toLowerCase().includes(q) ||
+        (n._note || "").toLowerCase().includes(q));
+      if (!matches.length) return setStatus(`No wallet matching “${q}”.`, true);
+      network.selectNodes(matches.map(n => n.id));
+      network.focus(matches[0].id, { scale: 1.1, animation: { duration: 500 } });
+      setStatus(matches.length === 1
+        ? `Found ${matches[0]._baseLabel || abbrev(matches[0].id)}.`
+        : `${matches.length} matches highlighted — centred on the first.`);
+    }
+    $("search").addEventListener("keydown", (e) => { if (e.key === "Enter") runSearch(); });
+
+    // ── Path finding (shift-click two nodes) ─────────────────────────────────
+
+    let pathSource = null;
+    let pathActive = false;
+
+    function bfsPath(a, b, directed) {
+      const adj = new Map();
+      const link = (x, y) => { if (!adj.has(x)) adj.set(x, []); adj.get(x).push(y); };
+      for (const e of visEdges.get()) {
+        link(e.from, e.to);
+        if (!directed) link(e.to, e.from);
+      }
+      const prev = new Map([[a, null]]);
+      const queue = [a];
+      while (queue.length) {
+        const cur = queue.shift();
+        if (cur === b) {
+          const path = [];
+          for (let n = b; n !== null; n = prev.get(n)) path.unshift(n);
+          return path;
+        }
+        for (const nxt of adj.get(cur) || []) {
+          if (!prev.has(nxt)) { prev.set(nxt, cur); queue.push(nxt); }
+        }
+      }
+      return null;
+    }
+
+    function highlightPath(path) {
+      pathActive = true;
+      const inPath = new Set(path);
+      const pairs = new Set();
+      for (let i = 0; i < path.length - 1; i++) {
+        pairs.add(path[i] + "|" + path[i + 1]);
+        pairs.add(path[i + 1] + "|" + path[i]);
+      }
+      visNodes.update(visNodes.get().map(n =>
+        ({ id: n.id, opacity: inPath.has(n.id) ? 1 : 0.15 })));
+      visEdges.update(visEdges.get().map(e => {
+        const on = pairs.has(e.from + "|" + e.to);
+        return { id: e.id, color: on
+          ? { color: "#f778ba", highlight: "#f778ba", opacity: 1 }
+          : { ...EDGE_DEFAULT, opacity: 0.15 } };
+      }));
+    }
+
+    function clearPathHighlight() {
+      pathActive = false;
+      pathSource = null;
+      if (!visNodes) return;
+      visNodes.update(visNodes.get().map(n => ({ id: n.id, opacity: 1 })));
+      visEdges.update(visEdges.get().map(e => ({ id: e.id, color: { ...EDGE_DEFAULT } })));
+    }
+
+    function handlePathClick(nodeId) {
+      if (pathActive) clearPathHighlight();
+      if (!pathSource) {
+        pathSource = nodeId;
+        network.selectNodes([nodeId]);
+        setStatus(`Path start: ${abbrev(nodeId)} — shift-click a second wallet.`);
+        return;
+      }
+      if (pathSource === nodeId) return;
+      const start = pathSource;
+      let path = bfsPath(start, nodeId, true);
+      let directed = true;
+      if (!path) { path = bfsPath(start, nodeId, false); directed = false; }
+      if (!path) {
+        pathSource = null;
+        return setStatus("No path between those wallets in the current graph.", true);
+      }
+      highlightPath(path);
+      pathSource = null;
+      const labels = path.map(id => {
+        const n = visNodes.get(id);
+        return (n && n._baseLabel) || abbrev(id);
+      });
+      setStatus(`${directed ? "Flow path" : "Path (ignoring direction)"}: ` +
+                `${labels.join(" → ")} · ${path.length - 1} hop(s) — Esc to clear.`);
+    }
+
+    // ── Analysis sidebar ─────────────────────────────────────────────────────
+
+    function flowRow(label, valueHtml, nodeId) {
+      const row = document.createElement("div");
+      row.className = "flow-row";
+      row.innerHTML = `<span class="flow-addr" title="${nodeId}">${label}</span>` +
+                      `<span class="flow-val">${valueHtml}</span>`;
+      row.addEventListener("click", () => {
+        network.selectNodes([nodeId]);
+        network.focus(nodeId, { scale: 1.2, animation: { duration: 500 } });
+      });
+      return row;
+    }
+
+    function buildAnalysis(data) {
+      const seed = data.seed;
+      const labelById = new Map(data.nodes.map(n => [n.id, n.label]));
+      const nameOf = (id) => labelById.get(id) || abbrev(id);
+
+      const inflows  = data.edges.filter(e => e.to === seed && e.from !== seed);
+      const outflows = data.edges.filter(e => e.from === seed && e.to !== seed);
+      const totIn  = inflows.reduce((s, e) => s + e.value_eth, 0);
+      const totOut = outflows.reduce((s, e) => s + e.value_eth, 0);
+      const txIn   = inflows.reduce((s, e) => s + e.count, 0);
+      const txOut  = outflows.reduce((s, e) => s + e.count, 0);
+      const net = totIn - totOut;
+
+      $("seed-summary").innerHTML = `
+        <div class="stat"><div class="sum-label">In (direct)</div>
+          <div class="sum-val tx-in">${fmtEth(totIn)} ETH · ${txIn} tx</div></div>
+        <div class="stat"><div class="sum-label">Out (direct)</div>
+          <div class="sum-val tx-out">${fmtEth(totOut)} ETH · ${txOut} tx</div></div>
+        <div class="stat"><div class="sum-label">Net flow</div>
+          <div class="sum-val ${net >= 0 ? "tx-in" : "tx-out"}">${net >= 0 ? "+" : "−"}${fmtEth(Math.abs(net))} ETH</div></div>
+        <div class="stat"><div class="sum-label">Direct counterparties</div>
+          <div class="sum-val">${new Set([...inflows.map(e => e.from), ...outflows.map(e => e.to)]).size}</div></div>`;
+
+      const fill = (elId, edgesList, otherOf) => {
+        const el = $(elId);
+        el.innerHTML = "";
+        const top = [...edgesList].sort((a, b) => b.value_eth - a.value_eth).slice(0, 8);
+        if (!top.length) el.innerHTML = `<div class="flow-val" style="padding:3px 6px">none</div>`;
+        for (const e of top) {
+          const other = otherOf(e);
+          el.appendChild(flowRow(nameOf(other), `${fmtEth(e.value_eth)} ETH · ${e.count} tx`, other));
+        }
+      };
+      fill("top-in",  inflows,  e => e.from);
+      fill("top-out", outflows, e => e.to);
+
+      // Most active: combined tx count with the seed across both directions.
+      const activity = new Map();
+      for (const e of [...inflows, ...outflows]) {
+        const other = e.to === seed ? e.from : e.to;
+        activity.set(other, (activity.get(other) || 0) + e.count);
+      }
+      const act = $("top-active");
+      act.innerHTML = "";
+      [...activity.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
+        .forEach(([addr, count]) =>
+          act.appendChild(flowRow(nameOf(addr), `${count} tx`, addr)));
+
+      $("sidebar").style.display = "flex";
+    }
+
+    $("sidebar-hide").addEventListener("click", () => {
+      $("sidebar").style.display = "none";
+    });
+
+    // ── Export ───────────────────────────────────────────────────────────────
+
+    function downloadURL(url, name) {
+      const a = document.createElement("a");
+      a.href = url; a.download = name; a.click();
+    }
+
+    $("export-png").addEventListener("click", () => {
+      if (!network) return setStatus("Trace a graph first.", true);
+      const src = network.canvas.frame.canvas;
+      const out = document.createElement("canvas");
+      out.width = src.width; out.height = src.height;
+      const ctx = out.getContext("2d");
+      ctx.fillStyle = "#0e1116";
+      ctx.fillRect(0, 0, out.width, out.height);
+      ctx.drawImage(src, 0, 0);
+      downloadURL(out.toDataURL("image/png"), `etherflow-${lastData.seed.slice(0, 10)}.png`);
+    });
+
+    $("export-json").addEventListener("click", () => {
+      if (!lastData) return setStatus("Trace a graph first.", true);
+      const blob = new Blob([JSON.stringify(lastData, null, 2)], { type: "application/json" });
+      downloadURL(URL.createObjectURL(blob), `etherflow-${lastData.seed.slice(0, 10)}.json`);
+    });
+
+    // ── Annotation popup ─────────────────────────────────────────────────────
+
+    let currentAnnotationAddr = null;
+    let selectedColor = null;
+
+    function renderSwatches() {
+      const container = $("color-swatches");
+      container.innerHTML = "";
+      PALETTE.forEach(({ color, label }) => {
+        const sw = document.createElement("div");
+        sw.className = "swatch" + (color === selectedColor ? " selected" : "");
+        sw.title = label;
+        sw.style.background = color || "#21262d";
+        if (!color) sw.textContent = "×";
+        sw.addEventListener("click", () => {
+          selectedColor = color;
+          container.querySelectorAll(".swatch").forEach(s => s.classList.remove("selected"));
+          sw.classList.add("selected");
+        });
+        container.appendChild(sw);
+      });
+    }
+
+    // ── Transaction list ─────────────────────────────────────────────────────
+
+    let txPage = 1;
+    let txPages = 1;
+    let txTotal = 0;
+
+    function renderTxSummary(s) {
+      if (!s || (s.in_count === 0 && s.out_count === 0)) {
+        $("tx-summary").style.display = "none";
+        return;
+      }
+      const net = s.net_eth;
+      $("tx-summary").innerHTML = `
+        <div class="sum-item"><span class="sum-label">In</span>
+          <span class="sum-val tx-in">${fmtEth(s.in_eth)} ETH · ${s.in_count} tx</span></div>
+        <div class="sum-item"><span class="sum-label">Out</span>
+          <span class="sum-val tx-out">${fmtEth(s.out_eth)} ETH · ${s.out_count} tx</span></div>
+        <div class="sum-item"><span class="sum-label">Net</span>
+          <span class="sum-val ${net >= 0 ? "tx-in" : "tx-out"}">${net >= 0 ? "+" : "−"}${fmtEth(Math.abs(net))} ETH</span></div>
+        <div class="sum-item"><span class="sum-label">Counterparties</span>
+          <span class="sum-val">${s.counterparties}</span></div>
+        <div class="sum-item"><span class="sum-label">Active</span>
+          <span class="sum-val">${fmtDate(s.first_ts)} → ${fmtDate(s.last_ts)}</span></div>`;
+      $("tx-summary").style.display = "flex";
+    }
+
+    async function loadTxPage(page) {
+      const source = $("source").value;
+      $("tx-loading").textContent = "Loading…";
+      $("tx-table").style.display = "none";
+      $("tx-pagination").style.display = "none";
+
+      const url = `/api/transactions?address=${currentAnnotationAddr}&source=${source}&page=${page}&per_page=15`;
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!res.ok) { $("tx-loading").textContent = data.error || "Failed"; return; }
+
+        txPage  = data.page;
+        txPages = data.pages;
+        txTotal = data.total;
+        $("tx-heading").textContent = `Transactions (${txTotal})`;
+        $("tx-loading").textContent = "";
+        renderTxSummary(data.summary);
+
+        const tbody = $("tx-body");
+        tbody.innerHTML = "";
+        for (const tx of data.txs) {
+          const isOut = tx.from === currentAnnotationAddr;
+          const counterparty = isOut ? tx.to : tx.from;
+          const dirSpan = `<span class="${isOut ? "tx-out" : "tx-in"}">${isOut ? "↑" : "↓"}</span>`;
+          const cpCell = `<span title="${counterparty}">${abbrev(counterparty)}</span>`;
+          const dateCell = tx.hash
+            ? `<a class="tx-hash-link" href="https://etherscan.io/tx/${tx.hash}" target="_blank" title="${tx.hash}">${tx.date}</a>`
+            : tx.date;
+          const valStr = tx.value_eth === 0 ? "—" : tx.value_eth.toFixed(6);
+          tbody.insertAdjacentHTML("beforeend",
+            `<tr><td>${dateCell}</td><td>${dirSpan}</td><td>${cpCell}</td>` +
+            `<td class="tx-val">${valStr}</td><td class="tx-method" title="${tx.method}">${tx.method || "—"}</td></tr>`);
+        }
+
+        $("tx-table").style.display = data.txs.length ? "table" : "none";
+        if (txPages > 1) {
+          $("tx-page-info").textContent = `Page ${txPage} of ${txPages}`;
+          $("tx-prev").disabled = txPage <= 1;
+          $("tx-next").disabled = txPage >= txPages;
+          $("tx-pagination").style.display = "flex";
+        }
+      } catch (e) {
+        $("tx-loading").textContent = "Error loading transactions.";
+      }
+    }
+
+    $("tx-prev").addEventListener("click", () => { if (txPage > 1) loadTxPage(txPage - 1); });
+    $("tx-next").addEventListener("click", () => { if (txPage < txPages) loadTxPage(txPage + 1); });
+
+    function openAnnotationPopup(address) {
+      currentAnnotationAddr = address;
+      const node = visNodes.get(address);
+      $("popup-addr").textContent = (node && node._baseLabel !== address)
+        ? `${node._baseLabel}  ·  ${address}` : address;
+      $("annotation-note").value = node?._note || "";
+      selectedColor = node?._customColor || null;
+      renderSwatches();
+      // Reset tx section.
+      $("tx-heading").textContent = "Transactions";
+      $("tx-loading").textContent = "";
+      $("tx-summary").style.display = "none";
+      $("tx-table").style.display = "none";
+      $("tx-pagination").style.display = "none";
+      $("annotation-popup").style.display = "block";
+      $("annotation-note").focus();
+      loadTxPage(1);
+    }
+
+    function closeAnnotationPopup() {
+      $("annotation-popup").style.display = "none";
+      currentAnnotationAddr = null;
+    }
+
+    async function saveAnnotation() {
+      const note = $("annotation-note").value.trim();
+      const color = selectedColor;
+      const address = currentAnnotationAddr;
+      const res = await fetch("/api/annotate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address, note, color }),
+      });
+      if (!res.ok) { alert("Save failed"); return; }
+
+      // Update node in-place without re-tracing.
+      const node = visNodes.get(address);
+      node._note = note;
+      node._customColor = color;
+      node.color = color || naturalColor(node);
+      node.borderWidth = (note || color) ? 3 : 1;
+      node.shapeProperties = { borderDashes: (note || color) ? [4, 2] : false };
+      const titleBase = node.title.replace(/\n📝 .*$/, "");
+      node.title = note ? `${titleBase}\n📝 ${note}` : titleBase;
+      const snippet = noteSnippet(note);
+      node.label = snippet ? `${node._baseLabel}\n<i>${snippet}</i>` : node._baseLabel;
+      visNodes.update(node);
+      closeAnnotationPopup();
+    }
+
+    // ── Expand node (+1 hop) ─────────────────────────────────────────────────
+
+    async function expandNode() {
+      const addr = currentAnnotationAddr;
+      const source = $("source").value, limit = $("limit").value;
+      const btn = $("annotation-expand");
+      btn.disabled = true;
+      btn.textContent = "Expanding…";
+      try {
+        const res = await fetch(`/api/trace?address=${addr}&depth=1&limit=${limit}&source=${source}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Expand failed");
+
+        const baseDepth = (visNodes.get(addr)?._depth ?? 0) + 1;
+        let addedNodes = 0, addedEdges = 0;
+        for (const n of data.nodes) {
+          if (visNodes.get(n.id)) continue;
+          n.seed = false;          // only the original trace seed keeps the star
+          n.depth = baseDepth;
+          visNodes.add(nodeVisProps(n));
+          lastData.nodes.push(n);
+          addedNodes++;
+        }
+        for (const e of data.edges) {
+          if (visEdges.get(`${e.from}|${e.to}`)) continue;
+          visEdges.add(edgeVisProps(e));
+          lastData.edges.push(e);
+          addedEdges++;
+        }
+        closeAnnotationPopup();
+        setStatus(addedNodes || addedEdges
+          ? `Expanded ${abbrev(addr)}: +${addedNodes} wallets, +${addedEdges} flows.`
+          : `Nothing new around ${abbrev(addr)} (already on the graph, or no transactions).`);
+      } catch (err) {
+        setStatus(err.message, true);
+        closeAnnotationPopup();
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Expand +1 hop";
+      }
+    }
+
+    $("annotation-expand").addEventListener("click", expandNode);
+    $("annotation-etherscan").addEventListener("click", () => {
+      window.open(`https://etherscan.io/address/${currentAnnotationAddr}`, "_blank");
+    });
+    $("annotation-save").addEventListener("click", saveAnnotation);
+    $("annotation-clear").addEventListener("click", () => {
+      $("annotation-note").value = "";
+      selectedColor = null;
+      saveAnnotation();
+    });
+    $("annotation-cancel").addEventListener("click", closeAnnotationPopup);
+    $("annotation-note").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveAnnotation();
+      if (e.key === "Escape") closeAnnotationPopup();
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      if ($("annotation-popup").style.display === "block") closeAnnotationPopup();
+      else if (pathActive || pathSource) { clearPathHighlight(); setStatus(""); }
+    });
+
+    $("go").addEventListener("click", trace);
+    $("address").addEventListener("keydown", (e) => { if (e.key === "Enter") trace(); });
+  </script>
+</body>
+</html>

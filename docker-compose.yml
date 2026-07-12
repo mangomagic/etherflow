@@ -1,0 +1,12 @@
+services:
+  etherflow:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      # Compose reads .env from this directory automatically, so a local
+      # `.env` with ETHERSCAN_API_KEY=... works for Docker and non-Docker runs.
+      - ETHERSCAN_API_KEY=${ETHERSCAN_API_KEY:-}
+    volumes:
+      # CSV exports and annotations.json live here and persist across rebuilds.
+      - ./data:/app/data
